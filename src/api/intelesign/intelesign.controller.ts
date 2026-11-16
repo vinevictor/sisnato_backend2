@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -33,6 +34,7 @@ import { NatodocQueryDto } from './dto/natodoc-query.dto';
 import { QueryDto } from './dto/query.dto';
 import { CancelarIntelesignDto } from './dto/cancelar.dto';
 import { ReenviarIntelesignDto } from './dto/reenviar.dto';
+import { EditarEmailSignatarioDto } from './dto/editar-email.dto';
 import { IntelesignAllEntity } from './entities/intelesign.entity';
 import { StatusEntity } from './entities/status/status.entity';
 import { IntelesignService } from './intelesign.service';
@@ -190,6 +192,33 @@ export class IntelesignController {
       +id,
       req.user,
       dto.signatarioId,
+    );
+  }
+
+  @Patch(':id/signatario/:signatarioId/email')
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Corrige o email de um signatário (somente ADM).',
+    description:
+      'Altera o email na Intellisign e no SisNato, sem recriar o envelope. Só para signatário que ainda não assinou, em envelope aguardando assinatura. Tenta reenviar a notificação para o novo email.',
+  })
+  @ApiNotFoundResponse({
+    description: 'Envelope ou signatário não encontrado.',
+    type: ErrorEntity,
+  })
+  async editarEmail(
+    @Param('id') id: string,
+    @Param('signatarioId') signatarioId: string,
+    @Body() dto: EditarEmailSignatarioDto,
+    @Req() req: any,
+  ) {
+    return await this.intelesignService.editarEmailSignatario(
+      +id,
+      +signatarioId,
+      dto.email,
+      req.user,
     );
   }
 

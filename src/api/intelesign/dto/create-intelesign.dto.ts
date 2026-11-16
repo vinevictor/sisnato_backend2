@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsEnum, IsNotEmpty, IsOptional } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
 import { SignatarioDto } from './sign.dto';
 
 export class CreateIntelesignDto {
@@ -71,6 +71,7 @@ export class CreateIntelesignDto {
   @IsOptional()
   @Transform(({ value }) => value || `SisNato - Assinatura de documento`)
   @Type(() => String)
+  @MaxLength(60, { message: 'O título deve ter no máximo 60 caracteres' })
   title: string;
 
   @ApiProperty({
@@ -82,6 +83,7 @@ export class CreateIntelesignDto {
   @IsOptional()
   @Transform(({ value }) => value || 'Contrato de financiamento de imóvel')
   @Type(() => String)
+  @MaxLength(60, { message: 'O assunto deve ter no máximo 60 caracteres' })
   subject: string;
 
   @ApiProperty({
@@ -98,6 +100,8 @@ export class CreateIntelesignDto {
       'Por favor, assine o documento para prosseguir com o processo de financiamento de imóvel.',
   )
   @Type(() => String)
+  // Limites da Intellisign: acima disso o envelope é recusado com 422
+  @MaxLength(500, { message: 'A mensagem deve ter no máximo 500 caracteres' })
   message: string;
 
   @ApiProperty({

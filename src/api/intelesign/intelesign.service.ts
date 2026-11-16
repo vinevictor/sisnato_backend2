@@ -2498,6 +2498,170 @@ export class IntelesignService {
     });
   }
 
+  /**
+   * Corrige o email de um signatário que ainda não assinou (somente ADM).
+   * A Intellisign aceita PATCH no destinatário mesmo com o envelope enviado;
+   * o corpo substitui a lista de endereçados inteira, então os demais canais
+   * (WhatsApp) e o CPF são reenviados como estão lá.
+   */
+  async editarEmailSignatario(
+    id: number,
+    signatarioId: number,
+    email: string,
+    User: UserPayload,
+  ) {
+    if (User.hierarquia !== 'ADM') {
+      throw new HttpException(
+        'Somente administradores podem editar o email do signatário',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    // findOne sincroniza o status antes de validar
+    const envelope = await this.findOne(id, User);
+    if (!envelope) {
+      throw new HttpException('Envelope não encontrado', 404);
+    }
+    if (!envelope.UUID) {
+      throw new HttpException(
+        'Envelope sem UUID: não foi criado na Intellisign',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+    if (envelope.cancelado_em) {
+      throw new HttpException(
+        'Envelope cancelado não pode ser alterado',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const finalizados = ['done', 'completed', 'rejected', 'failed', 'expired'];
+    if (finalizados.includes(envelope.status)) {
+      throw new HttpException(
+        'Envelope não está aguardando assinatura',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const signatario = envelope.signatarios.find((s) => s.id === signatarioId);
+    if (!signatario) {
+      throw new HttpException('Signatário não encontrado', 404);
+    }
+    if (signatario.state === 'done' || signatario.filled_at) {
+      throw new HttpException(
+        'Este signatário já assinou',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (!signatario.UUID) {
+      throw new HttpException(
+        'Signatário ainda sem identificação na Intellisign. Sincronize o status e tente novamente.',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+    if (signatario.email.trim().toLowerCase() === email) {
+      throw new HttpException(
+        'O novo email é igual ao atual',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const token = await this.refreshToken();
+    const status = await this.GetStatus(envelope.UUID, token);
+    const recipient = (status.recipients || []).find(
+      (r: any) => r.id === signatario.UUID,
+    );
+    if (!recipient) {
+      throw new HttpException(
+        'Signatário não encontrado na Intellisign',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    const cpf = signatario.cpf.replace(/\D/g, '');
+    const addressees = (recipient.addressees || []).map((a: any) => ({
+      via: a.via,
+      value: a.via === 'email' ? email : a.value,
+      name: a.name || signatario.nome.trim(),
+      identifiers: (a.identifiers || []).map((i: any) => ({
+        code: i.code,
+        is_required: i.is_required ?? true,
+        // A Intellisign devolve o CPF formatado; o cadastro usa só dígitos
+        value: i.code === 'CPF' ? cpf : i.value,
+      })),
+    }));
+    if (!addressees.some((a: any) => a.via === 'email')) {
+      addressees.unshift({
+        via: 'email',
+        value: email,
+        name: signatario.nome.trim(),
+        identifiers: [{ code: 'CPF', is_required: true, value: cpf }],
+      });
+    }
+
+    const url = `https://api.intellisign.com/v1/envelopes/${envelope.UUID}/recipients/${signatario.UUID}`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ addressees }),
+    });
+    const dados = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('[IntelesignService] Erro ao editar email do signatário', {
+        envelope: envelope.UUID,
+        signatarioId,
+        status: response.status,
+        dados: JSON.stringify(dados),
+      });
+      throw new HttpException(
+        dados?.message || 'A Intellisign não aceitou a alteração do email',
+        response.status === 422 || response.status === 400
+          ? HttpStatus.BAD_REQUEST
+          : HttpStatus.BAD_GATEWAY,
+      );
+    }
+
+    await this.prisma.intelesignSignatario.update({
+      where: { id: signatario.id },
+      data: { email },
+    });
+    console.log('[IntelesignService] Email do signatário alterado', {
+      envelope: envelope.UUID,
+      signatarioId,
+      de: signatario.email,
+      para: email,
+      por: User.id,
+    });
+
+    // Só quem está na vez de assinar recebe o link agora; os demais são
+    // notificados pela Intellisign quando chegar a ordem deles
+    let notificado = false;
+    let aviso: string | null = null;
+    if (recipient.state === 'waiting' || recipient.state === 'signing') {
+      const notify = await fetch(`${url}/notify`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      notificado = notify.ok;
+      if (!notify.ok) {
+        const erro = await notify.json().catch(() => ({}));
+        aviso =
+          erro?.message ||
+          'Não foi possível reenviar a notificação agora. Use "Reenviar" em alguns minutos.';
+      }
+    } else {
+      aviso =
+        'O signatário ainda não está na vez de assinar; receberá o email quando chegar a ordem dele.';
+    }
+
+    return this.createResponse(
+      notificado
+        ? `Email alterado e notificação enviada para ${email}`
+        : `Email alterado para ${email}`,
+      200,
+      { signatarioId, email, notificado, aviso },
+    );
+  }
+
   async GetFinanceira(id: number): Promise<boolean> {
     const financeira = await this.prisma.financeiro.findUnique({
       where: {
