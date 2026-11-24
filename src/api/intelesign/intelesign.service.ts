@@ -2329,19 +2329,49 @@ export class IntelesignService {
    * os pendentes do envelope.
    */
   /**
-   * Marca o envelope como cancelado só no SisNato. A Intellisign não é
-   * avisada, então os links de assinatura continuam válidos lá.
+   * Cancelamento em duas etapas:
+   * 1. Quem tem permissão de cancelar (ADM ou role.natosign_cancelar)
+   *    solicita, com motivo.
+   * 2. O ADM responsável (role.natosign_confirmar_cancelamento) cancela o
+   *    envelope na Intellisign/Soluti e confirma no SisNato, ou recusa.
+   * Permissões são lidas do banco (e não do JWT) para valerem sem novo login.
    */
-  async cancelar(id: number, User: UserPayload, motivo?: string) {
+  private async roleDoBanco(userId: number) {
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    return (usuario?.role as Record<string, unknown>) || {};
+  }
+
+  private async exigirConfirmadorCancelamento(User: UserPayload) {
+    const role = await this.roleDoBanco(User.id);
+    if (User.hierarquia !== 'ADM' || !role.natosign_confirmar_cancelamento) {
+      throw new HttpException(
+        'Somente o administrador responsável pode confirmar cancelamentos',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+  }
+
+  private readonly cancelamentoSelect = {
+    id: true,
+    title: true,
+    original_name: true,
+    status: true,
+    cancelado_em: true,
+    cancelado_por: true,
+    motivo_cancelamento: true,
+    cancelamento_solicitado_em: true,
+    cancelamento_solicitado_por: true,
+  };
+
+  async solicitarCancelamento(id: number, User: UserPayload, motivo?: string) {
     if (User.hierarquia !== 'ADM') {
-      // Lê do banco (e não do JWT) para a permissão valer sem novo login
-      const usuario = await this.prisma.user.findUnique({
-        where: { id: User.id },
-        select: { role: true },
-      });
-      if (!(usuario?.role as Record<string, unknown>)?.natosign_cancelar) {
+      const role = await this.roleDoBanco(User.id);
+      if (!role.natosign_cancelar) {
         throw new HttpException(
-          'Você não tem permissão para cancelar envelopes',
+          'Você não tem permissão para solicitar cancelamento de envelopes',
           HttpStatus.FORBIDDEN,
         );
       }
@@ -2366,7 +2396,11 @@ export class IntelesignService {
 
     const envelope = await this.prisma.intelesign.findFirst({
       where,
-      select: { id: true, cancelado_em: true },
+      select: {
+        id: true,
+        cancelado_em: true,
+        cancelamento_solicitado_em: true,
+      },
     });
     if (!envelope) {
       throw new HttpException('Envelope não encontrado', HttpStatus.NOT_FOUND);
@@ -2377,23 +2411,109 @@ export class IntelesignService {
         HttpStatus.BAD_REQUEST,
       );
     }
+    if (envelope.cancelamento_solicitado_em) {
+      throw new HttpException(
+        'Já existe um pedido de cancelamento para este envelope',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
+    const atualizado = await this.prisma.intelesign.update({
+      where: { id: envelope.id },
+      data: {
+        cancelamento_solicitado_em: new Date(),
+        cancelamento_solicitado_por: User.nome,
+        cancelamento_solicitado_por_id: User.id,
+        motivo_cancelamento: motivo?.trim() || null,
+      },
+      select: this.cancelamentoSelect,
+    });
+    return this.createResponse(
+      'Cancelamento solicitado. O administrador responsável vai analisar.',
+      200,
+      atualizado,
+    );
+  }
+
+  /** Pedidos aguardando o ADM responsável */
+  async cancelamentosPendentes(User: UserPayload) {
+    await this.exigirConfirmadorCancelamento(User);
+    return this.prisma.intelesign.findMany({
+      where: {
+        ativo: true,
+        cancelado_em: null,
+        cancelamento_solicitado_em: { not: null },
+      },
+      select: {
+        ...this.cancelamentoSelect,
+        UUID: true,
+        contrutora: { select: { fantasia: true } },
+      },
+      orderBy: { cancelamento_solicitado_em: 'asc' },
+    });
+  }
+
+  private async pedidoPendente(id: number) {
+    const envelope = await this.prisma.intelesign.findFirst({
+      where: { id, ativo: true },
+      select: {
+        id: true,
+        cancelado_em: true,
+        cancelamento_solicitado_em: true,
+      },
+    });
+    if (!envelope) {
+      throw new HttpException('Envelope não encontrado', HttpStatus.NOT_FOUND);
+    }
+    if (envelope.cancelado_em) {
+      throw new HttpException(
+        'Envelope já está cancelado',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (!envelope.cancelamento_solicitado_em) {
+      throw new HttpException(
+        'Não há pedido de cancelamento para este envelope',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    return envelope;
+  }
+
+  /** O ADM já cancelou na Intellisign/Soluti; marca como cancelado aqui */
+  async confirmarCancelamento(id: number, User: UserPayload) {
+    await this.exigirConfirmadorCancelamento(User);
+    const envelope = await this.pedidoPendente(id);
     const atualizado = await this.prisma.intelesign.update({
       where: { id: envelope.id },
       data: {
         cancelado_em: new Date(),
         cancelado_por: User.nome,
-        motivo_cancelamento: motivo?.trim() || null,
         status_view: 'Cancelado',
       },
-      select: {
-        id: true,
-        cancelado_em: true,
-        cancelado_por: true,
-        motivo_cancelamento: true,
-      },
+      select: this.cancelamentoSelect,
     });
     return this.createResponse('Envelope cancelado', 200, atualizado);
+  }
+
+  async recusarCancelamento(id: number, User: UserPayload) {
+    await this.exigirConfirmadorCancelamento(User);
+    const envelope = await this.pedidoPendente(id);
+    const atualizado = await this.prisma.intelesign.update({
+      where: { id: envelope.id },
+      data: {
+        cancelamento_solicitado_em: null,
+        cancelamento_solicitado_por: null,
+        cancelamento_solicitado_por_id: null,
+        motivo_cancelamento: null,
+      },
+      select: this.cancelamentoSelect,
+    });
+    return this.createResponse(
+      'Pedido de cancelamento recusado',
+      200,
+      atualizado,
+    );
   }
 
   async reenviar(id: number, User: UserPayload, signatarioId?: number) {

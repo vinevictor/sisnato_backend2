@@ -495,6 +495,11 @@ model Intelesign {
   cancelado_em        DateTime?
   cancelado_por       String?
   motivo_cancelamento String?
+  // Pedido de cancelamento, confirmado depois pelo ADM responsável
+  // (role.natosign_confirmar_cancelamento) após cancelar na Intellisign
+  cancelamento_solicitado_em     DateTime?
+  cancelamento_solicitado_por    String?
+  cancelamento_solicitado_por_id Int?
   // Cobrança: status_pg vai de pending -> billed (entrou num relatório) -> paid
   relatorio_natosign_id Int?
   cca                 Financeiro?            @relation(fields: [cca_id], references: [id], onDelete: Cascade)
