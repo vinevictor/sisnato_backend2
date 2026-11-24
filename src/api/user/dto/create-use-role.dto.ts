@@ -184,4 +184,17 @@ export class CreateUseRoleDto {
   @IsBoolean({ message: 'natosign_cancelar deve ser true ou false' })
   @IsOptional()
   natosign_cancelar?: boolean;
+
+  @ApiProperty({
+    type: Boolean,
+    required: false,
+    title: 'Confirmar cancelamento NatoSign',
+    description:
+      'Recebe os pedidos de cancelamento do NatoSign e confirma (somente ADM)',
+  })
+  @IsBoolean({
+    message: 'natosign_confirmar_cancelamento deve ser true ou false',
+  })
+  @IsOptional()
+  natosign_confirmar_cancelamento?: boolean;
 }

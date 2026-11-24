@@ -108,6 +108,16 @@ export class IntelesignController {
     return this.intelesignService.config();
   }
 
+  @Get('cancelamentos/pendentes')
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Pedidos de cancelamento pendentes (ADM responsável).',
+  })
+  async cancelamentosPendentes(@Req() req: any) {
+    return await this.intelesignService.cancelamentosPendentes(req.user);
+  }
+
   @Get('natodoc')
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
@@ -227,9 +237,9 @@ export class IntelesignController {
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Cancela o envelope no SisNato.',
+    summary: 'Solicita o cancelamento do envelope.',
     description:
-      'Marca o envelope como cancelado só no SisNato (a Intellisign não é avisada). Ele continua na listagem, identificado como cancelado, e não pode mais ser reenviado.',
+      'ADM ou role.natosign_cancelar. O pedido fica pendente até o ADM responsável (role.natosign_confirmar_cancelamento) cancelar na Intellisign e confirmar.',
   })
   @ApiNotFoundResponse({
     description: 'Envelope não encontrado.',
@@ -240,7 +250,35 @@ export class IntelesignController {
     @Body() dto: CancelarIntelesignDto,
     @Req() req: any,
   ) {
-    return await this.intelesignService.cancelar(+id, req.user, dto.motivo);
+    return await this.intelesignService.solicitarCancelamento(
+      +id,
+      req.user,
+      dto.motivo,
+    );
+  }
+
+  @Post(':id/cancelamento/confirmar')
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Confirma o pedido de cancelamento (ADM responsável).',
+    description:
+      'Usado depois que o ADM cancelou o envelope na Intellisign/Soluti. Marca o envelope como cancelado no SisNato.',
+  })
+  async confirmarCancelamento(@Param('id') id: string, @Req() req: any) {
+    return await this.intelesignService.confirmarCancelamento(+id, req.user);
+  }
+
+  @Post(':id/cancelamento/recusar')
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Recusa o pedido de cancelamento (ADM responsável).',
+  })
+  async recusarCancelamento(@Param('id') id: string, @Req() req: any) {
+    return await this.intelesignService.recusarCancelamento(+id, req.user);
   }
 
   @Delete(':id')

@@ -85,5 +85,10 @@ export class UseRole {
   @ApiResponseProperty({ type: Boolean })
   @IsOptional()
   @IsBoolean()
+  natosign_confirmar_cancelamento?: boolean;
+
+  @ApiResponseProperty({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
   natodoc?: boolean;
 }
