@@ -91,4 +91,9 @@ export class UseRole {
   @IsOptional()
   @IsBoolean()
   natodoc?: boolean;
+
+  @ApiResponseProperty({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  area_construtora?: boolean;
 }

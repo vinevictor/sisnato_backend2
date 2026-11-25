@@ -197,4 +197,15 @@ export class CreateUseRoleDto {
   })
   @IsOptional()
   natosign_confirmar_cancelamento?: boolean;
+
+  @ApiProperty({
+    type: Boolean,
+    required: false,
+    title: 'Área da Construtora',
+    description:
+      'Acessa os indicadores e relatórios da Área da Construtora (usuário CONST)',
+  })
+  @IsBoolean({ message: 'area_construtora deve ser true ou false' })
+  @IsOptional()
+  area_construtora?: boolean;
 }
