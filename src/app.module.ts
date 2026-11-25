@@ -43,6 +43,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AnalyticsModule } from './api/analytics/analytics.module';
 import { AgenteModule } from './api/agente/agente.module';
 import { ChatModule } from './api/chat/chat.module';
+import { AreaConstrutoraModule } from './api/area-construtora/area-construtora.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { ChatModule } from './api/chat/chat.module';
     AnalyticsModule,
     AgenteModule,
     ChatModule,
+    AreaConstrutoraModule,
   ],
 })
 export class AppModule {}
