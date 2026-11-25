@@ -69,15 +69,37 @@ const nomeConstrutoras = (e: Escopo) =>
   e.construtoras.map((c) => c.fantasia || c.razaosocial).join(', ');
 
 /** Totais que vão no topo do PDF e na aba "Resumo" do Excel. */
-function resumo(tipo: TipoRelatorio, linhas: any[]): [string, number][] {
+function resumo(
+  tipo: TipoRelatorio,
+  e: Escopo,
+  linhas: any[],
+): [string, number][] {
+  // 'DD/MM/AAAA[ HH:MI]' -> 'AAAA-MM-DD' para comparar com o período
+  const noPeriodo = (data: string | null) => {
+    if (!data) return false;
+    const [d, m, a] = data.slice(0, 10).split('/');
+    const isoData = `${a}-${m}-${d}`;
+    return isoData >= e.inicio && isoData <= e.fim;
+  };
   const contar = (filtro: (l: any) => boolean) => linhas.filter(filtro).length;
   if (tipo === 'certificacao') {
     const l = linhas as LinhaCertificacao[];
     return [
       ['Solicitações com movimento', l.length],
-      ['Emitidas no período', contar((x) => !!x.emitida_em)],
-      ['Distratos', contar((x) => x.andamento === 'DISTRATO')],
-      ['Revogadas', contar((x) => x.andamento === 'REVOGADO')],
+      // Revogado e distrato não contam como emitido (igual ao Dashboard)
+      [
+        'Emitidas no período',
+        contar(
+          (x) =>
+            noPeriodo(x.emitida_em) &&
+            ['APROVADO', 'EMITIDO'].includes(x.andamento),
+        ),
+      ],
+      ['Distratos', contar((x) => noPeriodo(x.distrato_em))],
+      [
+        'Revogadas',
+        contar((x) => x.andamento === 'REVOGADO' && noPeriodo(x.emitida_em)),
+      ],
     ];
   }
   const l = linhas as LinhaEnvelope[];
@@ -134,7 +156,7 @@ export async function gerarXlsx(
     new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
   ]);
   capa.addRow([]);
-  for (const [rotulo, valor] of resumo(tipo, linhas)) {
+  for (const [rotulo, valor] of resumo(tipo, e, linhas)) {
     const row = capa.addRow([rotulo, valor]);
     row.getCell(1).font = { bold: true };
     row.getCell(2).alignment = { horizontal: 'left' };
@@ -191,7 +213,7 @@ export async function gerarPdf(
   const visiveis = linhas.slice(0, LIMITE_LINHAS_PDF);
   const larguraTotal = colunas.reduce((s, c) => s + c.largura, 0);
 
-  const totais = resumo(tipo, linhas);
+  const totais = resumo(tipo, e, linhas);
   const conteudo: Content[] = [
     {
       columns: [

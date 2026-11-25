@@ -3,9 +3,12 @@ import { Prisma } from '@prisma/client';
 import { UserPayload } from 'src/auth/entities/user.entity';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { FiltroAreaConstrutoraDto } from './dto/filtro-area-construtora.dto';
+import { diasUteisEntre } from './dias-uteis';
 
-// Andamentos que contam como certificado emitido (mesmo critério da cobrança)
-const CERTIFICADO = Prisma.sql`('APROVADO', 'EMITIDO', 'REVOGADO')`;
+// Certificado emitido: mesmo critério do Dashboard/Analytics (revogado e
+// distrato não entram)
+const CERTIFICADO = Prisma.sql`('APROVADO', 'EMITIDO')`;
+const EMITIDO = Prisma.sql`s.andamento IN ${CERTIFICADO} AND NOT s.distrato`;
 // Período máximo aceito nos filtros
 const MAX_DIAS = 366;
 const FUSO = 'America/Sao_Paulo';
@@ -274,13 +277,15 @@ export class AreaConstrutoraService {
   private async indicadoresCertificacao(e: Escopo) {
     const { inicio, fim } = e;
     const criadaNoPeriodo = Prisma.sql`${dia(Prisma.sql`s."createdAt"`)} BETWEEN ${inicio}::date AND ${fim}::date`;
-    const emitidaNoPeriodo = Prisma.sql`s.andamento IN ${CERTIFICADO} AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date`;
+    const emitidaNoPeriodo = Prisma.sql`${EMITIDO} AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date`;
 
     const [resumo] = await this.Prisma.$queryRaw<any[]>`
       SELECT
         count(*) FILTER (WHERE ${criadaNoPeriodo}) AS criadas,
         count(*) FILTER (WHERE ${emitidaNoPeriodo}) AS emitidas,
-        count(*) FILTER (WHERE ${emitidaNoPeriodo} AND s.andamento = 'REVOGADO') AS revogadas,
+        count(*) FILTER (
+          WHERE s.andamento = 'REVOGADO' AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date
+        ) AS revogadas,
         count(*) FILTER (
           WHERE s.distrato
             AND ${dia(Prisma.sql`s.dt_distrato`)} BETWEEN ${inicio}::date AND ${fim}::date
@@ -288,16 +293,33 @@ export class AreaConstrutoraService {
         count(*) FILTER (
           WHERE ${criadaNoPeriodo} AND NOT s.distrato
             AND (s.andamento IS NULL OR s.andamento NOT IN ('APROVADO', 'EMITIDO', 'REVOGADO', 'RECUSADA'))
-        ) AS em_andamento,
-        avg(s.dt_aprovacao - ${dia(Prisma.sql`s."createdAt"`)}) FILTER (
-          WHERE ${emitidaNoPeriodo} AND s.dt_aprovacao >= ${dia(Prisma.sql`s."createdAt"`)}
-        ) AS tempo_medio,
-        percentile_cont(0.5) WITHIN GROUP (ORDER BY s.dt_aprovacao - ${dia(Prisma.sql`s."createdAt"`)}) FILTER (
-          WHERE ${emitidaNoPeriodo} AND s.dt_aprovacao >= ${dia(Prisma.sql`s."createdAt"`)}
-        ) AS tempo_mediano
+        ) AS em_andamento
       FROM "Solicitacao" s
       WHERE ${this.filtroSolicitacao(e)}
     `;
+
+    // Tempo até emitir em dias úteis (criação → data de aprovação)
+    const datas = await this.Prisma.$queryRaw<
+      { criada: string; emitida: string }[]
+    >`
+      SELECT to_char(${dia(Prisma.sql`s."createdAt"`)}, 'YYYY-MM-DD') AS criada,
+        to_char(s.dt_aprovacao, 'YYYY-MM-DD') AS emitida
+      FROM "Solicitacao" s
+      WHERE ${this.filtroSolicitacao(e)} AND ${emitidaNoPeriodo}
+        AND s.dt_aprovacao >= ${dia(Prisma.sql`s."createdAt"`)}
+    `;
+    const dias = datas
+      .map((d) => diasUteisEntre(d.criada, d.emitida))
+      .sort((a, b) => a - b);
+    const meio = Math.floor(dias.length / 2);
+    const tempoMedio = dias.length
+      ? dias.reduce((soma, d) => soma + d, 0) / dias.length
+      : null;
+    const tempoMediano = !dias.length
+      ? null
+      : dias.length % 2
+        ? dias[meio]
+        : (dias[meio - 1] + dias[meio]) / 2;
 
     const porAndamento = await this.Prisma.$queryRaw<any[]>`
       SELECT
@@ -315,8 +337,9 @@ export class AreaConstrutoraService {
       revogadas: numero(resumo.revogadas),
       distratos: numero(resumo.distratos),
       emAndamento: numero(resumo.em_andamento),
-      tempoMedioDias: decimal(resumo.tempo_medio),
-      tempoMedianoDias: decimal(resumo.tempo_mediano),
+      // dias úteis
+      tempoMedioDias: decimal(tempoMedio),
+      tempoMedianoDias: decimal(tempoMediano),
       porAndamento: porAndamento.map((l) => ({
         andamento: l.andamento,
         total: numero(l.total),
@@ -381,7 +404,7 @@ export class AreaConstrutoraService {
       emitidas AS (
         SELECT date_trunc('month', s.dt_aprovacao)::date AS mes, count(*) AS total
         FROM "Solicitacao" s
-        WHERE ${this.filtroSolicitacao(e)} AND s.andamento IN ${CERTIFICADO} AND s.dt_aprovacao IS NOT NULL
+        WHERE ${this.filtroSolicitacao(e)} AND ${EMITIDO} AND s.dt_aprovacao IS NOT NULL
         GROUP BY 1
       ),
       envelopes AS (
@@ -415,7 +438,7 @@ export class AreaConstrutoraService {
             WHERE ${dia(Prisma.sql`s."createdAt"`)} BETWEEN ${inicio}::date AND ${fim}::date
           ) AS criadas,
           count(*) FILTER (
-            WHERE s.andamento IN ${CERTIFICADO} AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date
+            WHERE ${EMITIDO} AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date
           ) AS emitidas
         FROM "Solicitacao" s
         WHERE ${this.filtroSolicitacao(e)} AND s."empreendimentoId" IS NOT NULL
@@ -468,7 +491,7 @@ export class AreaConstrutoraService {
         coalesce(f.fantasia, f.razaosocial) AS financeira,
         CASE WHEN s.distrato THEN 'DISTRATO' ELSE coalesce(s.andamento, 'SEM ANDAMENTO') END AS andamento,
         ${dataHora(Prisma.sql`s."createdAt"`)} AS criada_em,
-        CASE WHEN s.andamento IN ${CERTIFICADO} THEN to_char(s.dt_aprovacao, 'DD/MM/YYYY') END AS emitida_em,
+        CASE WHEN s.andamento IN ('APROVADO', 'EMITIDO', 'REVOGADO') THEN to_char(s.dt_aprovacao, 'DD/MM/YYYY') END AS emitida_em,
         CASE WHEN s.distrato THEN ${dataHora(Prisma.sql`s.dt_distrato`)} END AS distrato_em
       FROM "Solicitacao" s
       LEFT JOIN "Construtora" c ON c.id = s."construtoraId"
@@ -478,7 +501,7 @@ export class AreaConstrutoraService {
       WHERE ${this.filtroSolicitacao(e)}
         AND (
           ${dia(Prisma.sql`s."createdAt"`)} BETWEEN ${inicio}::date AND ${fim}::date
-          OR (s.andamento IN ${CERTIFICADO} AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date)
+          OR (s.andamento IN ('APROVADO', 'EMITIDO', 'REVOGADO') AND s.dt_aprovacao BETWEEN ${inicio}::date AND ${fim}::date)
           OR (s.distrato AND ${dia(Prisma.sql`s.dt_distrato`)} BETWEEN ${inicio}::date AND ${fim}::date)
         )
       ORDER BY s."createdAt" DESC
