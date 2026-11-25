@@ -70,8 +70,8 @@ const decimal = (valor: unknown) =>
  * Área restrita da construtora: indicadores e relatórios de movimentação
  * (certificação e envelopes NatoSign).
  *
- * Acesso: CONST vê só as construtoras ligadas a ele (lidas do banco, valem sem
- * novo login); ADM escolhe qualquer construtora.
+ * Acesso: CONST com a permissão area_construtora vê só as construtoras ligadas
+ * a ele (lidas do banco, valem sem novo login); ADM escolhe qualquer uma.
  */
 @Injectable()
 export class AreaConstrutoraService {
@@ -84,6 +84,18 @@ export class AreaConstrutoraService {
     if (User?.hierarquia !== 'CONST') {
       throw new HttpException(
         'A Área da Construtora é exclusiva para usuários de construtora',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    // Só o CONST com a permissão "Área da Construtora" (lida do banco,
+    // vale sem novo login)
+    const usuario = await this.Prisma.user.findUnique({
+      where: { id: User.id },
+      select: { role: true },
+    });
+    if (!(usuario?.role as Record<string, unknown>)?.area_construtora) {
+      throw new HttpException(
+        'Você não tem permissão para acessar a Área da Construtora',
         HttpStatus.FORBIDDEN,
       );
     }
