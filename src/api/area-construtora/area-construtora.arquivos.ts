@@ -39,12 +39,13 @@ const COLUNAS_CERTIFICACAO: Coluna<LinhaCertificacao>[] = [
 
 const COLUNAS_ENVELOPES: Coluna<LinhaEnvelope>[] = [
   { titulo: 'ID', campo: (l) => l.id, largura: 8 },
-  { titulo: 'Título', campo: (l) => l.titulo, largura: 34 },
+  { titulo: 'Título', campo: (l) => l.titulo, largura: 30 },
   {
     titulo: 'Empreendimento',
     campo: (l) => l.empreendimento ?? '',
-    largura: 26,
+    largura: 24,
   },
+  { titulo: 'Imobiliária', campo: (l) => l.imobiliaria ?? '', largura: 22 },
   { titulo: 'Criado por', campo: (l) => l.criado_por ?? '', largura: 22 },
   { titulo: 'Status', campo: (l) => l.status, largura: 14 },
   { titulo: 'Criado em', campo: (l) => l.criado_em ?? '', largura: 17 },
